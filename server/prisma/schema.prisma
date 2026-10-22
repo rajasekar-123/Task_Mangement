@@ -1,0 +1,162 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  PROJECT_MANAGER
+  DEVELOPER
+}
+
+// Declaration order matters: Postgres sorts enums by it, so ORDER BY priority DESC
+// yields CRITICAL first without a CASE expression.
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ActivityType {
+  TASK_CREATED
+  STATUS_CHANGED
+  ASSIGNED
+  MARKED_OVERDUE
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_IN_REVIEW
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  refreshTokens   RefreshToken[]
+  projectsCreated Project[]      @relation("ProjectCreator")
+  tasksAssigned   Task[]         @relation("TaskAssignee")
+  tasksCreated    Task[]         @relation("TaskCreator")
+  activities      ActivityLog[]
+  notifications   Notification[]
+
+  @@index([role])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) // the JWT "jti"
+  userId    String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Client {
+  id           String   @id @default(uuid())
+  name         String
+  contactEmail String?
+  createdAt    DateTime @default(now())
+
+  projects Project[]
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  description String   @default("")
+  clientId    String
+  createdById String
+  createdAt   DateTime @default(now())
+
+  client    Client        @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  createdBy User          @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  tasks     Task[]
+  activity  ActivityLog[]
+
+  @@index([createdById]) // PM scoping: WHERE createdById = :me
+  @@index([clientId])
+}
+
+model Task {
+  id          Int        @id @default(autoincrement()) // human-friendly "Task #12"
+  projectId   String
+  title       String
+  description String     @default("")
+  assigneeId  String?
+  status      TaskStatus @default(TODO)
+  priority    Priority   @default(MEDIUM)
+  dueDate     DateTime?
+  isOverdue   Boolean    @default(false)
+  createdById String
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee      User?          @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy     User           @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  activity      ActivityLog[]
+  notifications Notification[]
+
+  @@index([projectId, status]) // project board / filter by status
+  @@index([assigneeId, priority, dueDate]) // developer dashboard: own tasks by priority, due date
+  @@index([dueDate]) // date-range filters + overdue sweep
+  @@index([isOverdue, dueDate]) // overdue counts / sweep
+}
+
+model ActivityLog {
+  id         String       @id @default(uuid())
+  taskId     Int?
+  projectId  String
+  actorId    String? // null = system (overdue job)
+  type       ActivityType
+  fromStatus TaskStatus?
+  toStatus   TaskStatus?
+  detail     String? // e.g. new assignee name for ASSIGNED
+  createdAt  DateTime     @default(now())
+
+  task    Task?   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  actor   User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt(sort: Desc)]) // admin global feed
+  @@index([projectId, createdAt(sort: Desc)]) // PM feed (projects they own)
+  @@index([taskId, createdAt(sort: Desc)]) // per-task history + developer feed
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  message   String
+  taskId    Int?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt]) // unread count
+  @@index([userId, createdAt(sort: Desc)]) // dropdown list
+}

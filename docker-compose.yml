@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pulse
+      POSTGRES_PASSWORD: pulse
+      POSTGRES_DB: pulse
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pulse"]
+      interval: 3s
+      retries: 20
+
+  server:
+    build: ./server
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://pulse:pulse@db:5432/pulse?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?copy .env.example to .env}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?copy .env.example to .env}
+      CORS_ORIGINS: http://localhost:8080
+      NODE_ENV: production
+      COOKIE_SECURE: "false" # plain HTTP locally; set true behind HTTPS
+    expose: ["4000"]
+
+  client:
+    build: ./client
+    depends_on: [server]
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:
